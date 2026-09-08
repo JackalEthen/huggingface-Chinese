@@ -1,31 +1,39 @@
-# 本地打包 CRX：
+﻿# 本地打包 CRX：
 # 1. 生成图标（如尚未生成）
-# 2. 将 manifest 的 icons 字段写好（本脚本不自动改 manifest，见 README 说明）
-# 3. 用 Chrome --pack-extension 打包，产出 .crx 和 .pem（私钥，妥善保存，更新必须用同一把）
+# 2. 将干净副本（排除 scripts/prototype/release）拷入 staging
+# 3. 用 Chrome 或 Edge --pack-extension 打包，产出 .crx 和 .pem（私钥，妥善保存，更新必须用同一把）
 #
-# 用法：powershell -File scripts\pack.ps1 [Chrome路径]
-param([string]$ChromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe")
+# 用法：powershell -File scripts\pack.ps1
+param([string]$BrowserPath = "")
 
-if (-not (Test-Path $ChromePath)) {
-    foreach ($alt in
+# ---------- 定位浏览器 ----------
+if (-not $BrowserPath -or -not (Test-Path $BrowserPath)) {
+    $candidates = @(
         "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
         "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
-        "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe") {
-        if (Test-Path $alt) { $ChromePath = $alt; break }
-    }
+        "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe",
+        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+        "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+        "$env:LOCALAPPDATA\Microsoft\Edge\Application\msedge.exe"
+    )
+    $BrowserPath = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
-
-$root = Join-Path $PSScriptRoot ".."
-$icons = Join-Path $root "icons"
-if (-not (Test-Path (Join-Path $icons "128.png"))) {
-    & (Join-Path $PSScriptRoot "make-icons.ps1")
+if (-not $BrowserPath) {
+    Write-Error "未找到 Chrome 或 Edge，请用 -BrowserPath 指定浏览器完整路径"
+    exit 1
 }
+Write-Host "使用浏览器：$BrowserPath"
 
-# 打包输出目录
+# ---------- 准备 ----------
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $out = Join-Path $root "release"
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-# Chrome 打包必须指向包含 manifest.json 的目录；先拷贝干净副本排除 scripts/prototype/release
+if (-not (Test-Path (Join-Path $root "icons\128.png"))) {
+    & (Join-Path $PSScriptRoot "make-icons.ps1")
+}
+
+# ---------- staging：只拷贝插件运行所需文件 ----------
 $stage = Join-Path $out "_stage"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $stage | Out-Null
@@ -34,12 +42,29 @@ foreach ($f in "manifest.json", "background.js", "content.js", "popup.html", "po
     Copy-Item (Join-Path $root $f) -Destination $stage -Recurse
 }
 
-& $ChromePath --pack-extension=$stage --pack-extension-key=(Join-Path $out "hf-chinese.pem") 2>$null
+# ---------- 打包 ----------
+# Edge/Chrome 打包时若浏览器已在运行，--pack-extension 不弹窗，直接写文件后退出；
+# crx/pem 产出在 staging 目录的同目录下（release\），命名 _stage.crx/_stage.pem
+$pem = Join-Path $out "hf-chinese.pem"
+$crx = Join-Path $out "hf-chinese.crx"
+$old = @("$out\_stage.crx", "$out\_stage.pem") | Where-Object { Test-Path $_ }
+if ($old) { Remove-Item $old -Force }
 
-if (Test-Path (Join-Path $stage "..\_stage.crx")) {
-    Move-Item (Join-Path $out "_stage.crx") (Join-Path $out "hf-chinese.crx") -Force
-    Write-Host "已产出 release\hf-chinese.crx"
+# 已有私钥则复用（保证升级签名一致）；没有则首次打包自动生成
+if (Test-Path $pem) {
+    & $BrowserPath "--pack-extension=$stage" "--pack-extension-key=$pem" | Out-Null
 } else {
-    Write-Host "Chrome 未产出 crx。若首次打包：去掉 --pack-extension-key 参数重试（会自动生成 pem）"
+    & $BrowserPath "--pack-extension=$stage" | Out-Null
+}
+Start-Sleep -Seconds 3
+
+# ---------- 收尾 ----------
+if (Test-Path "$out\_stage.crx") {
+    Move-Item "$out\_stage.crx" $crx -Force
+    if (Test-Path "$out\_stage.pem") { Move-Item "$out\_stage.pem" $pem -Force }
+    Write-Host "已产出 $crx"
+    if (Test-Path $pem) { Write-Host "私钥：$pem（勿入库，勿丢失，升级必须复用）" }
+} else {
+    Write-Error "浏览器未产出 crx。检查：1) staging 路径含中文或空格  2) 浏览器是否被策略禁止打包"
 }
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
