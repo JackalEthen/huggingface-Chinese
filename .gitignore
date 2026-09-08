@@ -1,0 +1,12 @@
+# 私钥，绝不入库（CRX 更新必须用同一把）
+release/*.pem
+
+# 打包产物
+release/*.crx
+
+# 原型稿（设计定稿后仅为参考）
+prototype/
+
+# 系统文件
+Thumbs.db
+.DS_Store
