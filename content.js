@@ -25,12 +25,67 @@
     return normDict[raw.replace(/\s+/g, " ").trim().toLowerCase()];
   }
 
+  // ---------- 相对时间中文化 ----------
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function localizeTime(s) {
+    let m;
+    if ((m = s.match(/^just now$/i))) return "刚刚";
+    if ((m = s.match(/^(\d+)\s+seconds?\s+ago$/i))) return `${m[1]} 秒前`;
+    if ((m = s.match(/^about\s+(\d+)\s+seconds?\s+ago$/i))) return `约 ${m[1]} 秒前`;
+    if ((m = s.match(/^(\d+)\s+minutes?\s+ago$/i))) return `${m[1]} 分钟前`;
+    if ((m = s.match(/^about\s+(\d+)\s+minutes?\s+ago$/i))) return `约 ${m[1]} 分钟前`;
+    if ((m = s.match(/^(\d+)\s+hours?\s+ago$/i))) return `${m[1]} 小时前`;
+    if ((m = s.match(/^about\s+(\d+)\s+hours?\s+ago$/i))) return `约 ${m[1]} 小时前`;
+    if ((m = s.match(/^a day ago$/i))) return "1 天前";
+    if ((m = s.match(/^(\d+)\s+days?\s+ago$/i))) return `${m[1]} 天前`;
+    if ((m = s.match(/^about\s+(\d+)\s+days?\s+ago$/i))) return `约 ${m[1]} 天前`;
+    if ((m = s.match(/^a month ago$/i))) return "1 个月前";
+    if ((m = s.match(/^(\d+)\s+months?\s+ago$/i))) return `${m[1]} 个月前`;
+    if ((m = s.match(/^about\s+(\d+)\s+months?\s+ago$/i))) return `约 ${m[1]} 个月前`;
+    if ((m = s.match(/^a year ago$/i))) return "1 年前";
+    if ((m = s.match(/^(\d+)\s+years?\s+ago$/i))) return `${m[1]} 年前`;
+    // 绝对日期："Aug 14" / "Sep 17" / "Jan 9, 2024"
+    if ((m = s.match(/^([A-Z][a-z]{2})\s+(\d{1,2})(?:,\s*(\d{4}))?$/))) {
+      const mi = MONTHS.indexOf(m[1]);
+      if (mi >= 0) return m[3] ? `${m[3]}年${mi + 1}月${m[2]}日` : `${mi + 1}月${m[2]}日`;
+    }
+    return null;
+  }
+
+  // ---------- 规则翻译层 ----------
+  // 词典无法穷尽的动态/组合文案，用正则兜底
+  function applyRules(s) {
+    let m;
+    if ((m = s.match(/^Updated (.+)$/))) {
+      const t = localizeTime(m[1]);
+      return t ? `更新于 ${t}` : null;
+    }
+    if ((m = s.match(/^([\d,.]+[KMBT]?)\s+rows?$/))) return `${m[1]} 行`;
+    if ((m = s.match(/^(\d[\d,.]*)\s+models?$/))) return `${m[1]} 个模型`;
+    if ((m = s.match(/^(\d[\d,.]*)\s+items?$/))) return `${m[1]} 项`;
+    if ((m = s.match(/^(\d[\d,.]*)\s+languages?$/))) return `${m[1]} 种语言`;
+    if ((m = s.match(/^(\d[\d,.]*)\s+Spaces?$/))) return `${m[1]} 个空间`;
+    if ((m = s.match(/^(\d[\d,.]*)\s+datasets?$/))) return `${m[1]} 个数据集`;
+    if ((m = s.match(/^\+ ?(\d[\d,.]*) languages?$/))) return `+ ${m[1]} 种语言`;
+    if ((m = s.match(/^\+ ?(\d+)$/))) return `+ ${m[1]}`;
+    if ((m = s.match(/^View (\d[\d,.]*) collections?$/))) return `查看 ${m[1]} 个收藏集`;
+    if ((m = s.match(/^(.+?)\s+params$/))) return `${m[1]} 参数`;
+    return null;
+  }
+
+  function lookupAny(raw) {
+    const hit = lookup(raw);
+    if (hit && hit !== raw) return hit;
+    const s = raw.replace(/\s+/g, " ").trim();
+    return localizeTime(s) || applyRules(s);
+  }
+
   function translateTextNode(node) {
     if (!node || !node.nodeValue) return;
     const raw = node.nodeValue;
     const trimmed = raw.trim();
     if (!trimmed) return;
-    const hit = lookup(trimmed);
+    const hit = lookupAny(trimmed);
     if (hit && trimmed !== hit && !revertMap.has(trimmed)) {
       revertMap.set(hit, trimmed);
       node.nodeValue = raw.replace(trimmed, hit);
@@ -59,7 +114,7 @@
     if (PLACEHOLDER_TAGS.has(el.tagName)) {
       const ph = el.getAttribute("placeholder");
       if (ph) {
-        const hit = lookup(ph);
+        const hit = lookupAny(ph);
         if (hit) {
           if (!el.hasAttribute("data-hfzh-ph")) el.setAttribute("data-hfzh-ph", ph);
           el.setAttribute("placeholder", hit);
@@ -73,7 +128,7 @@
     }
     const title = el.getAttribute("title");
     if (title) {
-      const hit = lookup(title);
+      const hit = lookupAny(title);
       if (hit) {
         if (!el.hasAttribute("data-hfzh-title")) el.setAttribute("data-hfzh-title", title);
         el.setAttribute("title", hit);
@@ -102,20 +157,55 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  // ---------- README 翻译 ----------
-  // HF 模型卡 README 渲染在 .prose 容器（Svelte hydration 后存在）
+  // ---------- README / 长文本翻译 ----------
+  // HF 模型卡 README 渲染在 .prose 容器；docs 等长文本页用 article/main 兜底
   const CACHE_PREFIX = "hfzh-readme:";
   let translating = false;
 
+  function findProse() {
+    return Array.from(document.querySelectorAll("[class~='prose']"))[0] || null;
+  }
+
+  function contentRoot() {
+    return findProse()
+      || document.querySelector("article")
+      || document.querySelector("main");
+  }
+
+  // docs 正文容器自己也带 "prose" 类（prose-doc prose ...），无法靠类名区分，
+  // 只能按路径判断：/docs 与 /blog 是长文本页，其余是模型卡 README
+  function isReadme() {
+    return !/^\/(docs|blog)(\/|$)/.test(location.pathname);
+  }
+
+  // 正文门槛：少于 800 字符视为无长文本（目录页/索引页/纯导航页），不注入按钮
+  const MIN_TEXT = 800;
+
+  function hasLongText(root) {
+    if (!root) return false;
+    if (root.hasAttribute("data-hfzh-orig")) return true;
+    return root.innerText.replace(/\s+/g, " ").trim().length >= MIN_TEXT;
+  }
+
+  function label() {
+    return isReadme() ? "翻译 README（AI）" : "翻译本页（AI）";
+  }
+
   function injectTranslateButton() {
-    const prose = document.querySelector(".prose");
-    if (!prose || prose.querySelector(".hfzh-btn")) return;
+    const root = contentRoot();
+    if (!root) return;
+    const old = document.querySelector(".hfzh-btn");
+    if (!hasLongText(root)) {
+      if (old) old.remove();
+      return;
+    }
+    if (root.querySelector(".hfzh-btn")) return;
     const btn = document.createElement("button");
     btn.className = "hfzh-btn";
-    btn.textContent = "翻译 README（AI）";
+    btn.textContent = label();
     btn.onclick = translateReadme;
     Object.assign(btn.style, {
-      position: "sticky", top: "8px", zIndex: "50", display: "inline-block",
+      display: "inline-block",
       padding: "7px 14px", marginBottom: "10px", borderRadius: "8px", cursor: "pointer",
       border: "1px solid #d4d0c8", background: "#fff", color: "#191917",
       font: "600 13px system-ui", boxShadow: "0 1px 2px rgba(0,0,0,.08)",
@@ -126,7 +216,7 @@
       display: "none", margin: "4px 0 10px", padding: "8px 12px", borderRadius: "8px",
       background: "rgba(179,55,43,.08)", color: "#B3372B", font: "12.5px system-ui",
     });
-    prose.prepend(err, btn);
+    root.prepend(err, btn);
 
     const cached = sessionStorage.getItem(cacheKey());
     if (cached) applyReadme(cached);
@@ -137,61 +227,65 @@
   }
 
   function applyReadme(html) {
-    const prose = document.querySelector(".prose");
-    if (!prose) return;
-    if (!prose.hasAttribute("data-hfzh-orig")) {
-      prose.setAttribute("data-hfzh-orig", prose.innerHTML);
+    const root = contentRoot();
+    if (!root) return;
+    if (!root.hasAttribute("data-hfzh-orig")) {
+      root.setAttribute("data-hfzh-orig", root.innerHTML);
     }
-    prose.innerHTML = html;
-    const btn = prose.querySelector(".hfzh-btn");
+    root.innerHTML = html;
+    const btn = root.querySelector(".hfzh-btn");
     if (btn) {
       btn.textContent = "显示原文";
       btn.onclick = revertReadme;
-      prose.prepend(btn);
+      root.prepend(btn);
     }
     const err = document.querySelector(".hfzh-err");
-    if (err) prose.prepend(err);
+    if (err) root.prepend(err);
   }
 
   function revertReadme() {
-    const prose = document.querySelector(".prose");
-    if (!prose || !prose.hasAttribute("data-hfzh-orig")) return;
-    const orig = prose.getAttribute("data-hfzh-orig");
+    const root = contentRoot();
+    if (!root || !root.hasAttribute("data-hfzh-orig")) return;
+    const orig = root.getAttribute("data-hfzh-orig");
     sessionStorage.removeItem(cacheKey());
-    prose.innerHTML = orig;
-    const btn = prose.querySelector(".hfzh-btn");
+    root.innerHTML = orig;
+    const btn = root.querySelector(".hfzh-btn");
     if (btn) {
-      btn.textContent = "翻译 README（AI）";
+      btn.textContent = label();
       btn.onclick = translateReadme;
-      prose.prepend(btn);
+      root.prepend(btn);
     }
   }
 
   async function translateReadme() {
     if (translating) return;
-    const prose = document.querySelector(".prose");
+    const root = contentRoot();
     const err = document.querySelector(".hfzh-err");
     if (err) err.style.display = "none";
-    if (!prose) return;
+    if (!root) return;
 
     // 已是译文 -> 切回原文
-    if (prose.hasAttribute("data-hfzh-orig")) return revertReadme();
+    if (root.hasAttribute("data-hfzh-orig")) return revertReadme();
 
     const cached = sessionStorage.getItem(cacheKey());
     if (cached) return applyReadme(cached);
 
     translating = true;
-    const btn = prose.querySelector(".hfzh-btn");
+    const btn = root.querySelector(".hfzh-btn");
     if (btn) { btn.textContent = "翻译中…"; btn.disabled = true; }
 
-    const rawText = prose.innerText;
+    const rawText = root.innerText;
     try {
-      const res = await chrome.runtime.sendMessage({ type: "hfzh-translate", text: rawText });
+      const res = await chrome.runtime.sendMessage({
+        type: "hfzh-translate",
+        text: rawText,
+        kind: isReadme() ? "readme" : "page",
+      });
       if (!res || !res.ok) {
         if (err) {
           err.textContent = (res && res.error) || "翻译失败，请检查设置";
           err.style.display = "block";
-          if (err && !prose.contains(err)) prose.prepend(err);
+          if (err && !root.contains(err)) root.prepend(err);
         }
         if (res && res.needConfig) chrome.runtime.sendMessage({ type: "hfzh-open-options" });
       } else {
@@ -200,11 +294,11 @@
       }
     } finally {
       translating = false;
-      if (btn) { btn.textContent = "翻译 README（AI）"; btn.disabled = false; }
+      if (btn) { btn.textContent = label(); btn.disabled = false; }
     }
   }
 
-  // SPA 路由变化时重新探测 README 容器
+  // SPA 路由变化时重新探测内容容器
   function watchReadme() {
     const mo = new MutationObserver(() => injectTranslateButton());
     mo.observe(document.body, { childList: true, subtree: true });
@@ -215,6 +309,8 @@
     walk(document.body);
     observer.observe(document.body, { childList: true, subtree: true });
     watchReadme();
+    // SPA 首屏可能晚于 document_idle 才渲染，补一次兜底扫描
+    setTimeout(() => { if (enabled) walk(document.body); }, 1200);
   }
 
   chrome.storage.local.get({ enabled: true, [DICT_KEY]: null }, (cfg) => {

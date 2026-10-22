@@ -42,7 +42,7 @@ async function onMessage(msg, sender, sendResponse) {
     return;
   }
   if (msg.type === "hfzh-translate") {
-    translateReadme(msg.text, sender)
+    translateReadme(msg.text, sender, msg.kind)
       .then((r) => sendResponse(r))
       .catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
     return true; // async
@@ -63,7 +63,7 @@ async function getApiKey() {
   return new TextDecoder().decode(pt);
 }
 
-async function translateReadme(text, sender) {
+async function translateReadme(text, sender, kind) {
   const cfg = (await chrome.storage.local.get("apiCfg")).apiCfg;
   const apiKey = await getApiKey();
   if (!cfg || !cfg.baseUrl || !apiKey) {
@@ -71,10 +71,11 @@ async function translateReadme(text, sender) {
     if (sender.tab) chrome.tabs.sendMessage(sender.tab.id, { type: "hfzh-need-config" }).catch?.(() => {});
     return { ok: false, needConfig: true, error: "未配置 API" };
   }
+  const src = kind === "readme" ? "Hugging Face 模型卡 README" : "Hugging Face 技术文档页面";
   const prompt =
-    "你是专业翻译。将下面的 Hugging Face 模型卡 README 英文内容翻译成简体中文，" +
+    "你是专业翻译。将下面的" + src + "英文内容翻译成简体中文，" +
     "保留所有 Markdown 结构（标题/列表/表格/代码块/链接/图片），代码块内代码不翻译，" +
-    "专有名词（模型名、库名）保留原文。只输出翻译后的 Markdown，不要解释。\n\n" + text;
+    "专有名词（模型名、库名、函数名、API 名）保留原文。只输出翻译后的 Markdown，不要解释。\n\n" + text;
   try {
     const r = await fetch(cfg.baseUrl.replace(/\/$/, "") + "/chat/completions", {
       method: "POST",
@@ -100,8 +101,11 @@ async function translateReadme(text, sender) {
 
 // ponytail: LLM 输出 Markdown，转 HTML 用正则最小实现（标题/粗体/代码/列表/段落），
 // 富表格等复杂结构退化为纯文本段落，够用；要完美渲染再引入 marked
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function mdToHtml(md) {
-  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const lines = md.split("\n");
   const out = [];
   let inCode = false, inList = false, codeBuf = [], paraBuf = [];

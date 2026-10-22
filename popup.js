@@ -25,3 +25,27 @@ $("toggle").addEventListener("change", () => {
 });
 
 $("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+// 检查更新：复用 background 的词典拉取，比对 _v 后原地反馈
+$("check-update").addEventListener("click", async () => {
+  const btn = $("check-update");
+  const msg = $("update-msg");
+  btn.disabled = true;
+  msg.className = "update-msg";
+  msg.textContent = "检查中…";
+  const beforeV = ((await chrome.storage.local.get(DICT_KEY))[DICT_KEY] || {})._v || "";
+  await chrome.runtime.sendMessage({ type: "hfzh-update-dict" });
+  await new Promise((r) => setTimeout(r, 1500));
+  const after = (await chrome.storage.local.get(DICT_KEY))[DICT_KEY] || {};
+  const afterV = after._v || "";
+  if (afterV > beforeV) {
+    msg.className = "update-msg ok";
+    msg.textContent = "已更新到 " + afterV;
+    $("dict-count").textContent = Object.keys(after).filter((k) => k !== "_v").length;
+    $("dict-ver").textContent = afterV.slice(5);
+  } else {
+    msg.className = "update-msg ok";
+    msg.textContent = "已是最新版本 " + (afterV || "内置");
+  }
+  btn.disabled = false;
+});

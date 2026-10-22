@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HF 中文",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "中文化 Hugging Face 与 hf-mirror.com 界面，支持 AI 翻译模型卡 README",
   "permissions": ["storage"],
   "background": { "service_worker": "background.js" },
@@ -12,7 +12,7 @@
         "https://hf-mirror.com/*"
       ],
       "js": ["content.js"],
-      "run_at": "document_end"
+      "run_at": "document_idle"
     }
   ],
   "action": {
