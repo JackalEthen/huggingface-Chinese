@@ -3,6 +3,7 @@ release/*.pem
 
 # 打包产物
 release/*.crx
+release/*.zip
 
 # 原型稿（设计定稿后仅为参考）
 prototype/

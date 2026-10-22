@@ -1,7 +1,8 @@
-﻿# 本地打包 CRX：
+﻿# 本地打包 CRX + Zip 源码包：
 # 1. 生成图标（如尚未生成）
 # 2. 将干净副本（排除 scripts/prototype/release）拷入 staging
 # 3. 用 Chrome 或 Edge --pack-extension 打包，产出 .crx 和 .pem（私钥，妥善保存，更新必须用同一把）
+# 4. 用同一份 staging 打 Zip 源码包（不含 .pem，供开发者模式加载）
 #
 # 用法：powershell -File scripts\pack.ps1
 param([string]$BrowserPath = "")
@@ -57,6 +58,14 @@ if (Test-Path $pem) {
     & $BrowserPath "--pack-extension=$stage" | Out-Null
 }
 Start-Sleep -Seconds 3
+
+# ---------- Zip 源码包 ----------
+# 与 CRX 用同一份 staging，保证内容一致；staging 内本就不含 .pem
+$ver = (Get-Content (Join-Path $root "manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
+$zip = Join-Path $out "hf-chinese-v$ver.zip"
+if (Test-Path $zip) { Remove-Item $zip -Force }
+Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -Force
+Write-Host "已产出 $zip"
 
 # ---------- 收尾 ----------
 if (Test-Path "$out\_stage.crx") {
